@@ -50,9 +50,37 @@ Reply with a JSON object only:
  "refusal": "<reason or null>"}"""
 
 
-def rules_fingerprint() -> str:
+# Ablation: the same prompt without the business definitions (the semantic layer), keeping the
+# SQL conventions, refusals and output format. Measures how much the definitions are worth.
+_BUSINESS_BULLETS = ("- Revenue, profit", "- Dates:", "- Region:", "- Customer segment")
+
+
+def _without_business_definitions(rules: str) -> str:
+    """Drop the bullets (and their continuation lines) that carry business definitions."""
+    kept: list[str] = []
+    dropping = False
+    for line in rules.splitlines():
+        if line.startswith("- "):
+            dropping = line.startswith(_BUSINESS_BULLETS)
+        elif not line.startswith("  "):
+            dropping = False
+        if not dropping:
+            kept.append(line)
+    ablated = "\n".join(kept)
+    if ablated == rules:
+        raise ValueError("no business definition found in the rules")
+    return ablated.replace("Business definitions (same as the company dashboard):", "Conventions:")
+
+
+PROMPT_VARIANTS = {
+    "full": RULES,
+    "no-business-rules": _without_business_definitions(RULES),
+}
+
+
+def rules_fingerprint(rules: str = RULES) -> str:
     """Hash of the instructions: an eval run is only valid for the prompt it was made with."""
-    return hashlib.sha256(RULES.encode("utf-8")).hexdigest()[:12]
+    return hashlib.sha256(rules.encode("utf-8")).hexdigest()[:12]
 
 
 def describe_schema(conn: psycopg.Connection, schema: str = WAREHOUSE_SCHEMA) -> dict[str, str]:
@@ -66,9 +94,9 @@ def describe_schema(conn: psycopg.Connection, schema: str = WAREHOUSE_SCHEMA) ->
     return {table: columns for table, columns in rows}
 
 
-def system_prompt(tables: dict[str, str]) -> str:
+def system_prompt(tables: dict[str, str], rules: str = RULES) -> str:
     schema_lines = "\n".join(f"- analytics.{name}({columns})" for name, columns in tables.items())
-    return f"{RULES}\n\nTables:\n{schema_lines}"
+    return f"{rules}\n\nTables:\n{schema_lines}"
 
 
 @dataclass
@@ -119,11 +147,14 @@ def _parse_reply(content: str) -> dict[str, Any]:
 
 
 class SQLAgent:
-    def __init__(self, model: ChatModel, tables: dict[str, str], execute: Executor) -> None:
+    def __init__(
+        self, model: ChatModel, tables: dict[str, str], execute: Executor, rules: str = RULES
+    ) -> None:
         self.model = model
         self.tables = tables
         self.execute = execute
-        self._system = system_prompt(tables)
+        self.rules = rules
+        self._system = system_prompt(tables, rules)
 
     def ask(self, question: str) -> Answer:
         answer = Answer(question=question)

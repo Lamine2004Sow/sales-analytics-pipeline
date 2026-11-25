@@ -10,7 +10,7 @@
 >
 > Full evidence: [notebooks/what_can_this_data_support.ipynb](notebooks/what_can_this_data_support.ipynb).
 >
-> **Ask the warehouse in plain language**: a guarded text-to-SQL agent (DeepSeek) answers 52 benchmark questions with 98.1 % accuracy, checked by executing the SQL against reference queries, and refuses forecasts and out-of-scope requests ([details](#ask-the-warehouse-text-to-sql)).
+> **Ask the warehouse in plain language**: a guarded text-to-SQL agent (DeepSeek) reaches 98.3 % execution accuracy on a 71-question bench and refuses forecasts and out-of-scope requests. Without the warehouse's business definitions in its prompt it drops to 77.6 % ([details](#ask-the-warehouse-text-to-sql)).
 
 ## Project objective
 
@@ -94,8 +94,8 @@ Without Docker, the CLI still works: `uv sync`, `make run`, `make test`. The CLI
 │   ├── metabase.md
 │   └── powerbi.md                          # dashboard guide
 ├── eval/
-│   ├── questions.json                      # text-to-SQL bench: 52 questions, reference SQL or expected refusal
-│   └── results/                            # one recorded run per prompt variant
+│   ├── questions.json                      # text-to-SQL bench: 71 questions, reference SQL or expected refusal
+│   └── results/                            # one recorded run per prompt variant (v1/: first bench)
 ├── notebooks/
 │   └── what_can_this_data_support.ipynb    # feasibility audit: forecasting, leakage, segmentation
 ├── reports/                                # quality_report.json, rejected_rows.csv, run_summary.json
@@ -211,7 +211,8 @@ Other tabs: [Geography](docs/img/dashboard_geography.png), [Trends](docs/img/das
 
 ```bash
 make ask Q="Quel canal a le meilleur panier moyen ?"
-make eval-assistant   # rerun the bench (52 DeepSeek calls, about 1 minute)
+make eval-assistant   # rerun the bench (71 DeepSeek calls, about 2 minutes)
+uv run retail-pipeline eval-assistant --variant no-business-rules   # ablation
 ```
 
 The agent turns a question (English or French) into one PostgreSQL query, runs it and returns the
@@ -227,36 +228,55 @@ error goes back to the model once for a repair.
 the historical mean on this data, so the agent says so instead of inventing a number. It also
 refuses causal "why" questions, data that is not in the warehouse, and write requests.
 
-**Bench** ([eval/questions.json](eval/questions.json)), 52 questions:
+**Bench** ([eval/questions.json](eval/questions.json)), 71 questions:
 
 - 26 from the dashboard: each Metabase card's SQL is the reference, the question is reworded;
-- 13 multi-step questions written by hand (filters, joins, HAVING, shares);
+- 13 multi-step questions (filters, joins, HAVING, shares);
+- 15 advanced ones (window functions, top-1 per group, median, running totals, cohorts, an
+  empty year);
 - 4 in French;
-- 9 that must be refused (forecasts, causes, missing data, writes, a prompt injection).
+- 13 that must be refused (forecasts, causes, missing data such as cities, writes, a prompt
+  injection).
 
 **Metric.** Execution accuracy: the agent's rows must equal the reference query's rows, ignoring
 row order, allowing extra columns, comparing numbers rounded to 2 decimals. The model's own SQL
 is never judged by another model.
 
-**Results** (`deepseek-chat`, temperature 0):
+### Results (`deepseek-chat`, temperature 0)
 
-| Prompt variant | Execution accuracy | Refusal recall | Repaired queries | Latency p50 / p95 | Tokens in / out per question |
+**Where the accuracy comes from: the semantic layer.** The prompt carries the dashboard's
+business definitions (revenue counts completed orders only, how to reach dates and regions,
+where segments live). Removing them is the ablation below.
+
+| Prompt | Execution accuracy | Dashboard questions | Advanced | Refusal recall | Latency p50 / p95 |
 |---|---|---|---|---|---|
-| baseline | 97.7 % | 100.0 % | 50.0 % | 1.61 s / 2.86 s | 2,095 / 136 |
-| cast hint | 97.7 % | 100.0 % | 3.9 % | 1.18 s / 1.7 s | 1,454 / 94 |
+| Full | 98.3 % | 96.2 % | 100.0 % | 100.0 % | 1.91 s / 2.78 s |
+| Without business definitions | 77.6 % | 57.7 % | 93.3 % | 100.0 % | 1.75 s / 2.86 s |
 
-The baseline wrote `ROUND(double precision, 2)` on half of the questions, which PostgreSQL does
-not support; the repair loop fixed every case, at the cost of a second call. One line in the
-prompt (cast to `numeric` before `ROUND`) removed almost all repairs: same accuracy, p95 latency
-from 2.86 s to 1.7 s and 31 % fewer input tokens. The test suite checks that the current prompt has a
-recorded run above the floor (95 % execution accuracy, all refusals, all SQL valid), so a prompt
-change without a new run fails CI.
+All 13 wrong answers of the ablation have the same cause: the SQL sums every order, including
+cancelled and refunded ones, where the business counts completed orders only. The SQL is valid
+and plausible, so nothing flags it: the model writes advanced SQL without help, but the numbers
+are right only because the warehouse's definitions are written down.
+
+**A prompt fix measured on the first bench** (52 questions, archived in `eval/results/v1/`): the
+model wrote `ROUND(double precision, 2)`, which PostgreSQL rejects, on half of the questions.
+The repair loop fixed every case, at the cost of a second call. One line in the prompt (cast to
+`numeric` first) removed almost all repairs at equal accuracy:
+
+| Prompt | Execution accuracy | Repaired queries | Latency p95 | Input tokens per question |
+|---|---|---|---|---|
+| Baseline | 97.7 % | 50.0 % | 2.86 s | 2,095 |
+| Cast hint | 97.7 % | 3.9 % | 1.7 s | 1,454 |
+
+The test suite checks every recorded run against the current bench, and requires a run of the
+current prompt above the floor (95 % execution accuracy, all refusals, all SQL valid): changing
+the prompt or the bench without a new run fails CI.
 
 **Limits.**
 
-- The bench is close to its ceiling: on a 15-table star schema with business rules in the
-  prompt, 51 of 52 questions pass. It shows the agent is reliable on this schema, not that it
-  handles hard SQL; harder and ambiguous questions are the next step.
+- With the full prompt the bench sits near its ceiling (70 of 71), advanced questions included.
+  It shows the agent is reliable on this schema; ambiguous questions phrased by real users would
+  be the harder test.
 - Questions and reference SQL were written by the author of the agent.
 - The single miss (`card21`) is an ambiguity: the agent averaged NPS per customer from
   `dim_customer`, the reference averages over order rows. Both are defensible.

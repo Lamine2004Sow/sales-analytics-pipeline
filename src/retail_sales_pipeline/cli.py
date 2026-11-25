@@ -71,19 +71,31 @@ def _build_parser() -> argparse.ArgumentParser:
     ask.add_argument("-v", "--verbose", action="store_true", help="debug logging")
 
     bench = commands.add_parser("eval-assistant", help="run the text-to-SQL evaluation bench")
-    bench.add_argument("--label", default="current", help="results file suffix (prompt variant)")
+    bench.add_argument(
+        "--variant",
+        choices=("full", "no-business-rules"),
+        default="full",
+        help="prompt variant (no-business-rules: ablation without the business definitions)",
+    )
+    bench.add_argument("--label", default=None, help="results file suffix (default: variant)")
     bench.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     return parser
 
 
-def _assistant_session() -> tuple[psycopg.Connection, Any, str]:
-    from retail_sales_pipeline.assistant.agent import SQLAgent, describe_schema, postgres_executor
+def _assistant_session(variant: str = "full") -> tuple[psycopg.Connection, Any, str]:
+    from retail_sales_pipeline.assistant.agent import (
+        PROMPT_VARIANTS,
+        SQLAgent,
+        describe_schema,
+        postgres_executor,
+    )
     from retail_sales_pipeline.assistant.llm import DeepSeekChat
     from retail_sales_pipeline.load import warehouse_dsn
 
     model = DeepSeekChat()
     conn = psycopg.connect(warehouse_dsn(), autocommit=True)
-    agent = SQLAgent(model, describe_schema(conn), postgres_executor(conn))
+    rules = PROMPT_VARIANTS[variant]
+    agent = SQLAgent(model, describe_schema(conn), postgres_executor(conn), rules)
     return conn, agent, model.name
 
 
@@ -109,10 +121,10 @@ def _cmd_ask(args: argparse.Namespace) -> int:
 def _cmd_eval_assistant(args: argparse.Namespace) -> int:
     from retail_sales_pipeline.assistant.evaluate import run_bench, write_results
 
-    conn, agent, model_name = _assistant_session()
+    conn, agent, model_name = _assistant_session(args.variant)
     with conn:
-        result = run_bench(agent.ask, agent.execute, model_name, progress=print)
-    path = write_results(result, args.label)
+        result = run_bench(agent.ask, agent.execute, model_name, agent.rules, progress=print)
+    path = write_results(result, args.label or args.variant)
     print(json.dumps(result["summary"], indent=2))
     print(f"Results: {path}")
     return EXIT_OK

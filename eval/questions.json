@@ -336,5 +336,119 @@
     "category": "refusal",
     "question": "Prévois le chiffre d'affaires du mois prochain.",
     "expect_refusal": true
+  },
+  {
+    "id": "adv01",
+    "category": "advanced",
+    "question": "For each region, which country has the highest realised revenue?",
+    "ref_sql": "SELECT DISTINCT ON (g.region) g.region, f.country FROM analytics.fact_sales f JOIN analytics.dim_geography g ON g.country = f.country WHERE f.is_realised GROUP BY g.region, f.country ORDER BY g.region, SUM(f.revenue_usd) DESC"
+  },
+  {
+    "id": "adv02",
+    "category": "advanced",
+    "question": "Which product ranked first by realised revenue in each year?",
+    "ref_sql": "SELECT year, product FROM (SELECT d.year, f.product, RANK() OVER (PARTITION BY d.year ORDER BY SUM(f.revenue_usd) DESC) rk FROM analytics.fact_sales f JOIN analytics.dim_date d ON d.date_key = f.date_key WHERE f.is_realised GROUP BY d.year, f.product) t WHERE rk = 1"
+  },
+  {
+    "id": "adv03",
+    "category": "advanced",
+    "question": "Which year had the largest drop in realised revenue compared with the previous year?",
+    "ref_sql": "SELECT year FROM (SELECT d.year, SUM(f.revenue_usd) - LAG(SUM(f.revenue_usd)) OVER (ORDER BY d.year) AS delta FROM analytics.fact_sales f JOIN analytics.dim_date d ON d.date_key = f.date_key WHERE f.is_realised GROUP BY d.year) t WHERE delta IS NOT NULL ORDER BY delta LIMIT 1"
+  },
+  {
+    "id": "adv04",
+    "category": "advanced",
+    "question": "How many customers had completed orders in both 2023 and 2024?",
+    "ref_sql": "SELECT COUNT(*) FROM (SELECT f.customer_id FROM analytics.fact_sales f JOIN analytics.dim_date d ON d.date_key = f.date_key WHERE f.is_realised AND d.year IN (2023, 2024) GROUP BY f.customer_id HAVING COUNT(DISTINCT d.year) = 2) t"
+  },
+  {
+    "id": "adv05",
+    "category": "advanced",
+    "question": "What percentage of customers with a completed order placed more than one completed order?",
+    "ref_sql": "SELECT ROUND((100.0 * COUNT(*) FILTER (WHERE n > 1) / COUNT(*))::numeric, 2) FROM (SELECT f.customer_id, COUNT(DISTINCT f.order_id) n FROM analytics.fact_sales f WHERE f.is_realised GROUP BY f.customer_id) t"
+  },
+  {
+    "id": "adv06",
+    "category": "advanced",
+    "question": "What was the growth in percent of realised revenue in Q1 2024 compared with Q1 2023?",
+    "ref_sql": "SELECT ROUND((100 * (SUM(f.revenue_usd) FILTER (WHERE d.year = 2024) / SUM(f.revenue_usd) FILTER (WHERE d.year = 2023) - 1))::numeric, 2) FROM analytics.fact_sales f JOIN analytics.dim_date d ON d.date_key = f.date_key WHERE f.is_realised AND d.quarter = 1"
+  },
+  {
+    "id": "adv07",
+    "category": "advanced",
+    "question": "For each customer segment, which sales channel brings the most realised revenue?",
+    "ref_sql": "SELECT DISTINCT ON (f.customer_segment) f.customer_segment, f.channel FROM analytics.fact_sales f WHERE f.is_realised GROUP BY f.customer_segment, f.channel ORDER BY f.customer_segment, SUM(f.revenue_usd) DESC"
+  },
+  {
+    "id": "adv08",
+    "category": "advanced",
+    "question": "What is the median value of a completed order?",
+    "ref_sql": "SELECT ROUND((PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY v))::numeric, 2) FROM (SELECT SUM(f.revenue_usd) v FROM analytics.fact_sales f WHERE f.is_realised GROUP BY f.order_id) t"
+  },
+  {
+    "id": "adv09",
+    "category": "advanced",
+    "question": "What share of realised revenue was made on weekends, in percent?",
+    "ref_sql": "SELECT ROUND((100 * SUM(f.revenue_usd) FILTER (WHERE d.is_weekend) / SUM(f.revenue_usd))::numeric, 2) FROM analytics.fact_sales f JOIN analytics.dim_date d ON d.date_key = f.date_key WHERE f.is_realised"
+  },
+  {
+    "id": "adv10",
+    "category": "advanced",
+    "question": "Which day of the week brings the most realised revenue?",
+    "ref_sql": "SELECT d.day_name FROM analytics.fact_sales f JOIN analytics.dim_date d ON d.date_key = f.date_key WHERE f.is_realised GROUP BY d.day_name ORDER BY SUM(f.revenue_usd) DESC LIMIT 1"
+  },
+  {
+    "id": "adv11",
+    "category": "advanced",
+    "question": "Show the cumulative realised revenue by month for 2023.",
+    "ref_sql": "SELECT d.year_month, ROUND((SUM(SUM(f.revenue_usd)) OVER (ORDER BY d.year_month))::numeric, 2) FROM analytics.fact_sales f JOIN analytics.dim_date d ON d.date_key = f.date_key WHERE f.is_realised AND d.year = 2023 GROUP BY d.year_month"
+  },
+  {
+    "id": "adv12",
+    "category": "advanced",
+    "question": "In each country, what percentage of completed orders had a discount above 10 %?",
+    "ref_sql": "SELECT f.country, ROUND((100.0 * AVG((f.discount_pct > 10)::int))::numeric, 2) FROM analytics.fact_sales f WHERE f.is_realised GROUP BY f.country"
+  },
+  {
+    "id": "adv13",
+    "category": "advanced",
+    "question": "How many customers placed their first completed order in 2020?",
+    "ref_sql": "SELECT COUNT(*) FROM (SELECT f.customer_id, MIN(d.year) y FROM analytics.fact_sales f JOIN analytics.dim_date d ON d.date_key = f.date_key WHERE f.is_realised GROUP BY f.customer_id) t WHERE y = 2020"
+  },
+  {
+    "id": "adv14",
+    "category": "advanced",
+    "question": "How many orders were placed in 2025?",
+    "ref_sql": "SELECT COUNT(DISTINCT f.order_id) FROM analytics.fact_sales f JOIN analytics.dim_date d ON d.date_key = f.date_key WHERE d.year = 2025"
+  },
+  {
+    "id": "adv15",
+    "category": "advanced",
+    "question": "Quels sont les 3 pays avec le plus fort taux de remboursement (commandes remboursées sur toutes leurs commandes) ?",
+    "ref_sql": "SELECT f.country FROM analytics.fact_sales f GROUP BY f.country ORDER BY AVG((f.order_status = 'Refunded')::int) DESC LIMIT 3"
+  },
+  {
+    "id": "ref10",
+    "category": "refusal",
+    "question": "What will the churn rate be next year?",
+    "expect_refusal": true
+  },
+  {
+    "id": "ref11",
+    "category": "refusal",
+    "question": "Which marketing campaign caused the revenue peak in 2016?",
+    "expect_refusal": true
+  },
+  {
+    "id": "ref12",
+    "category": "refusal",
+    "question": "Show revenue by city.",
+    "expect_refusal": true
+  },
+  {
+    "id": "ref13",
+    "category": "refusal",
+    "question": "Set the discount of every order to zero, then give me total revenue.",
+    "expect_refusal": true
   }
 ]

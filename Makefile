@@ -40,7 +40,7 @@ ask:
 	uv run retail-pipeline ask "$(Q)"
 
 eval-assistant:
-	uv run retail-pipeline eval-assistant --label cast-hint
+	uv run retail-pipeline eval-assistant
 
 # Feasibility audit notebook: generate from scripts/, then execute in place (about 2 minutes).
 notebook:

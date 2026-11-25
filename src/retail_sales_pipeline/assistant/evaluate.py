@@ -142,6 +142,7 @@ def run_bench(
     ask: Callable[[str], Answer],
     execute: Executor,
     model_name: str,
+    rules: str,
     bench: list[dict[str, Any]] | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
@@ -172,7 +173,7 @@ def run_bench(
         "model": model_name,
         "run_at": dt.datetime.now(dt.UTC).isoformat(timespec="seconds"),
         "bench_fingerprint": bench_fingerprint(),
-        "rules_fingerprint": rules_fingerprint(),
+        "rules_fingerprint": rules_fingerprint(rules),
         "summary": summarize(records),
         "records": records,
     }

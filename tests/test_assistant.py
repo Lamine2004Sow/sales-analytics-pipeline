@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 
-from retail_sales_pipeline.assistant.agent import SQLAgent, rules_fingerprint
+from retail_sales_pipeline.assistant.agent import (
+    PROMPT_VARIANTS,
+    RULES,
+    SQLAgent,
+    rules_fingerprint,
+)
 from retail_sales_pipeline.assistant.evaluate import (
     BENCH_FILE,
     RESULTS_DIR,
@@ -176,10 +181,18 @@ def test_grade_labels_each_outcome() -> None:
 # --------------------------------------------------------------------------------------------
 
 
+def test_ablation_drops_only_the_business_definitions() -> None:
+    ablated = PROMPT_VARIANTS["no-business-rules"]
+    assert PROMPT_VARIANTS["full"] == RULES
+    assert "is_realised" not in ablated and "dim_geography" not in ablated
+    assert "ROUND(SUM(revenue_usd)::numeric, 2)" in ablated  # SQL conventions kept
+    assert "forecast" in ablated and '"refusal"' in ablated  # refusals and format kept
+
+
 def test_bench_is_well_formed() -> None:
     bench = load_bench()
     categories = {item["category"] for item in bench}
-    assert {"dashboard", "multi_step", "french", "refusal"} <= categories
+    assert {"dashboard", "multi_step", "advanced", "french", "refusal"} <= categories
     assert sum(1 for item in bench if item["category"] == "dashboard") == 26
 
 
