@@ -1,0 +1,48 @@
+[project]
+name = "retail-sales-pipeline"
+version = "0.1.0"
+description = "Retail sales ETL: Pydantic validation, Polars transformation, CSV exports for a Power BI dashboard."
+authors = [
+    { name = "lamine s", email = "lamine.2004pro.sow@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.11.2",
+    "polars>=2.1.0",
+    "psycopg[binary]>=3.3.9",
+    "pydantic>=2.14.4",
+    "requests>=2.34.2",
+    "scikit-learn>=1.9.1",
+    "statsmodels>=0.15.0",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ipykernel>=7.4.0",
+    "jupyter>=1.1.1",
+    "nbconvert>=7.17.2",
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
+
+[project.scripts]
+retail-pipeline = "retail_sales_pipeline.cli:main"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+# config.py keeps its hand-written compact season map (out of scope for formatting changes).
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: needs the local Postgres warehouse (make up); skipped when unreachable",
+]
