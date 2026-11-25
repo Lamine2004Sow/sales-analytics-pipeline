@@ -1,0 +1,262 @@
+# Retail Sales Data Pipeline
+
+> **Verdict.** Production ETL (Pydantic → Polars → Postgres → Metabase) on a 100k-order dataset.
+>
+> **The data is synthetic**: revenue equals quantity x price on 99.999 % of rows, product margins are flat (sd 0.18 pp), and customer segments change between orders.
+>
+> **Forecasting was tested and refused**: no model (8 tested, TimeSeriesSplit-style folds) beats the historical mean.
+>
+> **No clean predictive signal**: high R² only comes from leakage (price x quantity) or price tier (product); K-Means clusters are close to the null baseline, so rule-based RFM segments are kept.
+>
+> Full evidence: [notebooks/what_can_this_data_support.ipynb](notebooks/what_can_this_data_support.ipynb).
+
+## Project objective
+
+An end-to-end retail ETL pipeline over the Global Sales Dataset (100,000 orders). Raw rows are
+validated with Pydantic, transformed with Polars into a star schema and KPI tables, loaded into a
+local Postgres warehouse, and shown in a Metabase dashboard. Power BI is planned as a second
+front end, since it is not available on Linux.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Raw CSV<br/>data/global_sales_100k_50features.csv] --> B[Pydantic validation<br/>schemas.py / validate.py]
+    B -->|rejected rows| R[reports/rejected_rows.csv<br/>reports/quality_report.json]
+    B -->|valid rows| C[Polars cleaning<br/>transform.py]
+    C --> D[Star schema<br/>data/processed/]
+    C --> E[KPI marts<br/>data/marts/]
+    D --> L[retail-pipeline load]
+    E --> L
+    R --> L
+    L --> W[(Postgres 16<br/>schema analytics)]
+    W --> M[Metabase dashboard<br/>Retail Sales Overview]
+    D -.-> P[Power BI, planned<br/>docs/powerbi.md]
+    E -.-> P
+```
+
+## Tech stack
+
+| Layer | Tool |
+|---|---|
+| Language | Python 3.12 |
+| Package and environment manager | uv |
+| Validation | Pydantic v2 |
+| Transformation and export | Polars |
+| Tests and lint | pytest, ruff |
+| Warehouse | Postgres 16 in Docker, loaded with psycopg |
+| Dashboard | Metabase v0.65 in Docker (see [docs/metabase.md](docs/metabase.md)); Power BI planned (see [docs/powerbi.md](docs/powerbi.md)) |
+
+## Dataset
+
+- Global Sales Dataset: 100,000 orders, 50 columns, 2015 to 2024.
+- 10 countries (USA, Canada, Brazil, UK, Germany, UAE, China, India, Japan, Australia).
+- 10 products (Product_A to Product_J).
+- Source: Global Sales Dataset (link to add).
+- Place the CSV at `data/global_sales_100k_50features.csv`.
+
+## Quick start
+
+Requires Docker (with Compose) and uv. The stack is local only; credentials are in `.env`
+(copied from `.env.example`).
+
+```bash
+make up          # start Postgres (5433) and Metabase (3000), wait until healthy
+make run         # validate, clean, build the star schema and the KPI marts
+make load        # load the outputs into the warehouse (schema analytics)
+make dashboard   # provision Metabase: connection, cards, dashboard (idempotent)
+```
+
+Then open <http://localhost:3000> and sign in with `MB_ADMIN_EMAIL` / `MB_ADMIN_PASSWORD` from
+`.env`. `make all` runs `run`, `load` and `dashboard` in sequence. `make test` runs the test
+suite, and `make nuke` removes the containers and the warehouse volume.
+
+Full guide: [docs/metabase.md](docs/metabase.md) (tabs, refresh, troubleshooting).
+
+Without Docker, the CLI still works: `uv sync`, `make run`, `make test`. The CLI also has
+`uv run retail-pipeline validate` (validation and quality report only) and
+`uv run retail-pipeline run --max-rejected-pct 2` to tighten the rejection threshold.
+
+## Project structure
+
+```
+.
+├── data/
+│   ├── global_sales_100k_50features.csv   # raw input (not versioned)
+│   ├── processed/                          # star schema (loaded into Postgres, also for Power BI)
+│   └── marts/                              # pre-aggregated KPI tables
+├── docs/
+│   └── powerbi.md                          # dashboard guide
+├── notebooks/
+│   └── what_can_this_data_support.ipynb    # feasibility audit: forecasting, leakage, segmentation
+├── reports/                                # quality_report.json, rejected_rows.csv, run_summary.json
+│   └── figures/                            # PNG figures for the notebook and this README
+├── scripts/
+│   ├── build_feasibility_notebook.py       # generates the audit notebook (make notebook)
+│   └── metabase_setup.py                   # provisions the Metabase dashboard (make dashboard)
+├── src/retail_sales_pipeline/
+│   ├── __main__.py                         # python -m retail_sales_pipeline
+│   ├── audit.py                            # what the data supports: forecastability, leakage, synthetic fingerprints
+│   ├── cli.py                              # retail-pipeline run | validate
+│   ├── config.py                           # paths, mappings, tolerances
+│   ├── export.py                           # CSV writer
+│   ├── pipeline.py                         # end-to-end run and run summary
+│   ├── schemas.py                          # Pydantic model and business rules
+│   ├── segmentation.py                     # RFM, K-Means validation, null baselines, quantile segments
+│   ├── transform.py                        # cleaning, star schema, KPIs
+│   └── validate.py                         # row validation and quality report
+├── tests/
+│   ├── test_audit.py
+│   ├── test_pipeline.py                    # end-to-end and CLI tests
+│   ├── test_segmentation.py
+│   ├── test_transform.py
+│   └── test_validation.py
+├── Makefile
+└── pyproject.toml
+```
+
+## Validation rules
+
+Field constraints (from `schemas.py`):
+
+| Field(s) | Constraint |
+|---|---|
+| `order_id` | Format `ORD-YYYY-NNNNNN` |
+| `customer_id` | Integer > 0 |
+| `transaction_date` | Valid date |
+| `country`, `currency`, `product`, `industry`, `channel`, `customer_segment`, `payment_method`, `order_status`, `season`, `priority_segment` | Closed list of allowed values |
+| `year` | 2000 to 2100 |
+| `quarter`, `month`, `day_of_week`, `is_weekend` | Calendar ranges (0 to 6 for weekday) |
+| `quantity`, `frequency_orders`, `recency_days`, `support_tickets`, `days_to_delivery`, `customer_tenure_days` | Integer, minimum 0 or 1 |
+| `unit_price_usd`, `revenue_usd`, `revenue_local` | Strictly positive |
+| `discount_pct`, `tax_rate_pct` | 0 to 100 |
+| `profit_margin_pct` | -100 to 100 |
+| `nps_score` | 0 to 10 |
+| `engagement_score` | 0 to 100 |
+| `churn_probability` | 0 to 1 |
+| `rfm_*_score`, `rfm_total_score` | RFM scores 1 to 5, total 3 to 15 |
+| `is_repeat_customer`, `is_churned`, `discount_sensitive`, `return_flag` | 0 or 1 |
+
+Business rules (cross-field, all failed rules are reported together):
+
+| Rule name | Check |
+|---|---|
+| `date_mismatch` | `year`, `quarter`, `month`, `day_of_week`, `is_weekend` agree with `transaction_date` |
+| `season_mismatch` | `season` matches the month |
+| `currency_mismatch` | `currency` matches the country |
+| `discount_inconsistent` | `unit_price_after_discount_usd` = unit price x (1 - discount) |
+| `revenue_inconsistent` | `revenue_usd` = quantity x price after discount |
+| `tax_inconsistent` | `tax_amount_usd` = revenue x tax rate |
+| `margin_inconsistent` | `profit_margin_pct` = gross profit / revenue |
+| `profit_exceeds_revenue` | `gross_profit_usd` is not above `revenue_usd` |
+
+Duplicate `order_id` values are rejected as `duplicate_order_id` (the first occurrence is kept).
+
+Not checked on purpose: the year inside `order_id`. In the data, 365 orders dated 29 to 31
+December carry the ISO-week year (for example `ORD-2025-000152` dated 2024-12-30), so the rule
+would reject valid rows.
+
+## Transformations
+
+Cleaning (`transform.py`):
+
+- Strip whitespace in every text column, then remove exact duplicate rows and duplicate
+  `order_id` values.
+- Parse `transaction_date`, cast the flag columns to boolean, add `date_key` (YYYYMMDD).
+- Add `region` from the country (Americas: USA, Canada, Brazil; EMEA: UK, Germany, UAE; APAC:
+  China, India, Japan, Australia).
+- `is_realised` = `order_status == "Completed"`. Only realised orders count as revenue in the
+  KPIs.
+- `net_profit_usd` = gross profit - shipping cost; `discount_amount_usd` = (unit price - price
+  after discount) x quantity.
+
+Star schema (`data/processed/`):
+
+| Table | Content |
+|---|---|
+| `fact_sales` | One row per order, all statuses |
+| `dim_date` | Continuous calendar, one row per day |
+| `dim_customer` | One row per customer: latest snapshot plus order history |
+| `dim_product` | Products with a surrogate key |
+| `dim_geography` | Countries with region, currency and GDP per capita |
+
+KPI marts (`data/marts/`):
+
+`kpi_summary`, `sales_by_product`, `sales_by_region`, `sales_by_region_total`, `sales_monthly`,
+`sales_yearly`, `sales_by_segment`, `sales_by_channel`, `order_status_breakdown`.
+
+## Key results
+
+Figures from `data/marts/` after `make run`. Revenue, profit and customer counts use realised
+(Completed) orders: 78,054 of 100,000.
+
+| Measure | Value |
+|---|---|
+| Realised revenue | 131,577,388.66 USD |
+| Gross profit | 46,141,009.72 USD |
+| Gross margin | 35.07 % |
+| Average order value | 1,685.72 USD |
+| Units sold | 312,731 |
+| Customers (realised) | 39,480 |
+| Cancellation rate (all orders) | 5.97 % |
+| Refund rate (all orders) | 7.08 % |
+| Top products by revenue | Product_D 30.02 M, Product_H 24.44 M, Product_J 18.12 M |
+| Revenue by region | APAC 56.48 M (42.92 %), Americas 43.89 M (33.36 %), EMEA 31.21 M (23.72 %) |
+| Best segment by revenue | SMB, 45.37 M (34.48 %) |
+| Best segment by margin | Startup, 35.23 % |
+| Best year by revenue | 2016, 13.38 M (+2.49 % vs 2015) |
+
+Revenue is flat over the period: between 12.9 M and 13.4 M USD per year from 2015 to 2024.
+
+## What this dataset can and cannot support
+
+The full analysis is in [notebooks/what_can_this_data_support.ipynb](notebooks/what_can_this_data_support.ipynb)
+(about two minutes to execute; regenerate with `make notebook`).
+
+![Forecast backtest: skill versus the historical mean](reports/figures/backtest_skill.png)
+
+![Order revenue: R² by feature set and model](reports/figures/leakage_r2.png)
+
+![K-Means on RFM: silhouette and Davies-Bouldin versus k](reports/figures/kmeans_k.png)
+
+| Question | Test | Verdict |
+|---|---|---|
+| Can monthly revenue be forecast? | Eight forecasters on five rolling-origin folds, scored against the historical mean | No. The best model (`linear_trend`) is 0.6 % worse than the mean. |
+| Can order revenue be predicted? | Chronological split (train before 2023, test 2023-2024), with leaky and honest feature sets | Only through leakage (R² 0.999 from quantity x price) or price tier (honest R² 0.35, all from product). |
+| Are there natural customer segments? | K-Means on RFM, with stability and null baselines (uniform, permuted) | No clean clusters: silhouette peaks at 0.38 (k=2) and reaches the null level at k=5. Rule-based RFM segments are the deliverable. |
+
+## Data quality findings
+
+- 100 % of the 100,000 raw rows pass validation (0 rejected).
+- Customer attributes vary by order: 25,726 of 43,223 customers have more than one
+  `customer_segment`, and 28,223 have more than one `industry`. `dim_customer` keeps the latest
+  snapshot, so segment and industry slicers must use the order-level columns in `fact_sales`.
+- `return_flag` = 1 exactly on Refunded orders (7,077 rows), so `return_rate_pct` is computed over
+  all orders and equals the refund rate (7.08 %).
+- 365 orders dated 29 to 31 December carry the ISO-week year in `order_id`; this is expected and
+  not validated.
+
+## Power BI
+
+The current dashboard is Metabase, see [docs/metabase.md](docs/metabase.md). The Power BI guide
+(import from the CSV files in `data/processed/`, data model, DAX measures, six report pages, reference
+values) is kept in [docs/powerbi.md](docs/powerbi.md) as the planned Power BI version.
+
+## Business questions
+
+| Question | Where it is answered | Dashboard page |
+|---|---|---|
+| How are the headline KPIs doing (revenue, profit, margin, orders, customers)? | `kpi_summary.csv` | 1 Overview |
+| Which products drive revenue and margin? | `sales_by_product.csv` | 2 Products |
+| Which countries and regions generate the sales? | `sales_by_region.csv`, `sales_by_region_total.csv` | 3 Geography |
+| How do sales evolve over time (monthly, yearly, seasonality)? | `sales_monthly.csv`, `sales_yearly.csv` | 4 Trends |
+| Which customer segments are most profitable and loyal? | `sales_by_segment.csv`, `dim_customer` | 5 Customers |
+| How clean is the input data, and how many orders are cancelled or refunded? | `quality_report.json`, `order_status_breakdown.csv` | 6 Data quality |
+
+## Next steps
+
+- Write Parquet alongside CSV for faster loads and smaller files.
+- Add an orchestrator (Prefect or Airflow) for scheduled runs.
+- Support incremental loads instead of full rebuilds.
+- Add dashboard screenshots to `docs/`.
+- Apply the same audit to a real retail dataset.
