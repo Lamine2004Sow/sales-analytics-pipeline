@@ -185,6 +185,17 @@ KPI marts (`data/marts/`):
 `kpi_summary`, `sales_by_product`, `sales_by_region`, `sales_by_region_total`, `sales_monthly`,
 `sales_yearly`, `sales_by_segment`, `sales_by_channel`, `order_status_breakdown`.
 
+## Dashboard
+
+Metabase dashboard over the Postgres warehouse, provisioned by `make dashboard` (6 tabs, 26 cards).
+
+![Overview tab: KPI tiles and revenue by month](docs/img/dashboard_overview.png)
+
+![Products tab: revenue and gross margin by product](docs/img/dashboard_products.png)
+
+Other tabs: [Geography](docs/img/dashboard_geography.png), [Trends](docs/img/dashboard_trends.png),
+[Customers](docs/img/dashboard_customers.png), [Data quality](docs/img/dashboard_data-quality.png).
+
 ## Key results
 
 Figures from `data/marts/` after `make run`. Revenue, profit and customer counts use realised
