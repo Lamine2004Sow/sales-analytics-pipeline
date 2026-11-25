@@ -13,6 +13,7 @@ dependencies = [
     "pydantic>=2.14.4",
     "requests>=2.34.2",
     "scikit-learn>=1.9.1",
+    "sqlglot>=30.35.0",
     "statsmodels>=0.15.0",
 ]
 

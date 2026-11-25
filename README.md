@@ -9,6 +9,8 @@
 > **No clean predictive signal**: high R² only comes from leakage (price x quantity) or price tier (product); K-Means clusters are close to the null baseline, so rule-based RFM segments are kept.
 >
 > Full evidence: [notebooks/what_can_this_data_support.ipynb](notebooks/what_can_this_data_support.ipynb).
+>
+> **Ask the warehouse in plain language**: a guarded text-to-SQL agent (DeepSeek) answers 52 benchmark questions with 98.1 % accuracy, checked by executing the SQL against reference queries, and refuses forecasts and out-of-scope requests ([details](#ask-the-warehouse-text-to-sql)).
 
 ## Project objective
 
@@ -31,6 +33,7 @@ flowchart LR
     R --> L
     L --> W[(Postgres 16<br/>schema analytics)]
     W --> M[Metabase dashboard<br/>Retail Sales Overview]
+    W --> Q[Text-to-SQL agent<br/>retail-pipeline ask]
     D -.-> P[Power BI, planned<br/>docs/powerbi.md]
     E -.-> P
 ```
@@ -45,6 +48,7 @@ flowchart LR
 | Transformation and export | Polars |
 | Tests and lint | pytest, ruff |
 | Warehouse | Postgres 16 in Docker, loaded with psycopg |
+| Text-to-SQL | DeepSeek (`deepseek-chat`), sqlglot guardrails, execution-accuracy bench |
 | Dashboard | Metabase v0.65 in Docker (see [docs/metabase.md](docs/metabase.md)); Power BI planned (see [docs/powerbi.md](docs/powerbi.md)) |
 
 ## Dataset
@@ -86,7 +90,12 @@ Without Docker, the CLI still works: `uv sync`, `make run`, `make test`. The CLI
 │   ├── processed/                          # star schema (loaded into Postgres, also for Power BI)
 │   └── marts/                              # pre-aggregated KPI tables
 ├── docs/
+│   ├── img/                                # dashboard screenshots
+│   ├── metabase.md
 │   └── powerbi.md                          # dashboard guide
+├── eval/
+│   ├── questions.json                      # text-to-SQL bench: 52 questions, reference SQL or expected refusal
+│   └── results/                            # one recorded run per prompt variant
 ├── notebooks/
 │   └── what_can_this_data_support.ipynb    # feasibility audit: forecasting, leakage, segmentation
 ├── reports/                                # quality_report.json, rejected_rows.csv, run_summary.json
@@ -97,7 +106,8 @@ Without Docker, the CLI still works: `uv sync`, `make run`, `make test`. The CLI
 ├── src/retail_sales_pipeline/
 │   ├── __main__.py                         # python -m retail_sales_pipeline
 │   ├── audit.py                            # what the data supports: forecastability, leakage, synthetic fingerprints
-│   ├── cli.py                              # retail-pipeline run | validate
+│   ├── assistant/                          # text-to-SQL: guard.py, llm.py, agent.py, evaluate.py
+│   ├── cli.py                              # retail-pipeline run | validate | load | ask | eval-assistant
 │   ├── config.py                           # paths, mappings, tolerances
 │   ├── export.py                           # CSV writer
 │   ├── pipeline.py                         # end-to-end run and run summary
@@ -106,6 +116,7 @@ Without Docker, the CLI still works: `uv sync`, `make run`, `make test`. The CLI
 │   ├── transform.py                        # cleaning, star schema, KPIs
 │   └── validate.py                         # row validation and quality report
 ├── tests/
+│   ├── test_assistant.py                   # guardrails, result matching, agent loop, recorded runs
 │   ├── test_audit.py
 │   ├── test_pipeline.py                    # end-to-end and CLI tests
 │   ├── test_segmentation.py
@@ -196,6 +207,62 @@ Metabase dashboard over the Postgres warehouse, provisioned by `make dashboard` 
 Other tabs: [Geography](docs/img/dashboard_geography.png), [Trends](docs/img/dashboard_trends.png),
 [Customers](docs/img/dashboard_customers.png), [Data quality](docs/img/dashboard_data-quality.png).
 
+## Ask the warehouse (text-to-SQL)
+
+```bash
+make ask Q="Quel canal a le meilleur panier moyen ?"
+make eval-assistant   # rerun the bench (52 DeepSeek calls, about 1 minute)
+```
+
+The agent turns a question (English or French) into one PostgreSQL query, runs it and returns the
+rows with a one-sentence explanation. It needs `DEEPSEEK_API_KEY` in `.env`.
+
+**Guardrails.** The model's SQL is parsed with sqlglot before it reaches Postgres: one statement,
+`SELECT` only, no write or lock clause, tables from the `analytics` whitelist only, no `pg_*`,
+`dblink` or `set_config` functions, and a `LIMIT 1000` cap. It then runs in a read-only
+transaction with a 10 s statement timeout. When the guardrails or Postgres reject a query, the
+error goes back to the model once for a repair.
+
+**Refusals.** Forecasts are refused on purpose: the feasibility audit showed that no model beats
+the historical mean on this data, so the agent says so instead of inventing a number. It also
+refuses causal "why" questions, data that is not in the warehouse, and write requests.
+
+**Bench** ([eval/questions.json](eval/questions.json)), 52 questions:
+
+- 26 from the dashboard: each Metabase card's SQL is the reference, the question is reworded;
+- 13 multi-step questions written by hand (filters, joins, HAVING, shares);
+- 4 in French;
+- 9 that must be refused (forecasts, causes, missing data, writes, a prompt injection).
+
+**Metric.** Execution accuracy: the agent's rows must equal the reference query's rows, ignoring
+row order, allowing extra columns, comparing numbers rounded to 2 decimals. The model's own SQL
+is never judged by another model.
+
+**Results** (`deepseek-chat`, temperature 0):
+
+| Prompt variant | Execution accuracy | Refusal recall | Repaired queries | Latency p50 / p95 | Tokens in / out per question |
+|---|---|---|---|---|---|
+| baseline | 97.7 % | 100.0 % | 50.0 % | 1.61 s / 2.86 s | 2,095 / 136 |
+| cast hint | 97.7 % | 100.0 % | 3.9 % | 1.18 s / 1.7 s | 1,454 / 94 |
+
+The baseline wrote `ROUND(double precision, 2)` on half of the questions, which PostgreSQL does
+not support; the repair loop fixed every case, at the cost of a second call. One line in the
+prompt (cast to `numeric` before `ROUND`) removed almost all repairs: same accuracy, p95 latency
+from 2.86 s to 1.7 s and 31 % fewer input tokens. The test suite checks that the current prompt has a
+recorded run above the floor (95 % execution accuracy, all refusals, all SQL valid), so a prompt
+change without a new run fails CI.
+
+**Limits.**
+
+- The bench is close to its ceiling: on a 15-table star schema with business rules in the
+  prompt, 51 of 52 questions pass. It shows the agent is reliable on this schema, not that it
+  handles hard SQL; harder and ambiguous questions are the next step.
+- Questions and reference SQL were written by the author of the agent.
+- The single miss (`card21`) is an ambiguity: the agent averaged NPS per customer from
+  `dim_customer`, the reference averages over order rows. Both are defensible.
+- One model was tested; no cost figure is given because prices change, token counts are recorded
+  per question in `eval/results/`.
+
 ## Key results
 
 Figures from `data/marts/` after `make run`. Revenue, profit and customer counts use realised
@@ -269,5 +336,4 @@ values) is kept in [docs/powerbi.md](docs/powerbi.md) as the planned Power BI ve
 - Write Parquet alongside CSV for faster loads and smaller files.
 - Add an orchestrator (Prefect or Airflow) for scheduled runs.
 - Support incremental loads instead of full rebuilds.
-- Add dashboard screenshots to `docs/`.
 - Apply the same audit to a real retail dataset.

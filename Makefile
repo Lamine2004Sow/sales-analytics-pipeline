@@ -1,4 +1,4 @@
-.PHONY: install run validate test lint format clean up down load dashboard notebook all nuke
+.PHONY: install run validate test lint format clean up down load dashboard notebook ask eval-assistant all nuke
 
 install:
 	uv sync
@@ -34,6 +34,13 @@ load:
 
 dashboard:
 	uv run python scripts/metabase_setup.py
+
+# Text-to-SQL assistant (needs DEEPSEEK_API_KEY in .env and a loaded warehouse).
+ask:
+	uv run retail-pipeline ask "$(Q)"
+
+eval-assistant:
+	uv run retail-pipeline eval-assistant --label cast-hint
 
 # Feasibility audit notebook: generate from scripts/, then execute in place (about 2 minutes).
 notebook:

@@ -1,4 +1,4 @@
-"""Command line interface: `retail-pipeline run` and `retail-pipeline validate`."""
+"""Command line interface: run, validate, load, ask (text-to-SQL) and eval-assistant."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import logging
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import psycopg
 
@@ -64,7 +65,57 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reports-dir", type=Path, default=REPORTS_DIR, help="directory of quality_report.json"
     )
     load.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+
+    ask = commands.add_parser("ask", help="answer a business question with SQL (DeepSeek)")
+    ask.add_argument("question", help="question in plain English or French")
+    ask.add_argument("-v", "--verbose", action="store_true", help="debug logging")
+
+    bench = commands.add_parser("eval-assistant", help="run the text-to-SQL evaluation bench")
+    bench.add_argument("--label", default="current", help="results file suffix (prompt variant)")
+    bench.add_argument("-v", "--verbose", action="store_true", help="debug logging")
     return parser
+
+
+def _assistant_session() -> tuple[psycopg.Connection, Any, str]:
+    from retail_sales_pipeline.assistant.agent import SQLAgent, describe_schema, postgres_executor
+    from retail_sales_pipeline.assistant.llm import DeepSeekChat
+    from retail_sales_pipeline.load import warehouse_dsn
+
+    model = DeepSeekChat()
+    conn = psycopg.connect(warehouse_dsn(), autocommit=True)
+    agent = SQLAgent(model, describe_schema(conn), postgres_executor(conn))
+    return conn, agent, model.name
+
+
+def _cmd_ask(args: argparse.Namespace) -> int:
+    from retail_sales_pipeline.assistant.agent import format_rows
+
+    conn, agent, _ = _assistant_session()
+    with conn:
+        answer = agent.ask(args.question)
+    if answer.refusal:
+        print(f"Refused: {answer.refusal}")
+        return EXIT_OK
+    if answer.error:
+        print(f"error: {answer.error}\nSQL: {answer.sql}", file=sys.stderr)
+        return EXIT_DATA_QUALITY
+    print(f"SQL: {answer.sql}\n")
+    print(format_rows(answer.columns, answer.rows))
+    if answer.explanation:
+        print(f"\n{answer.explanation}")
+    return EXIT_OK
+
+
+def _cmd_eval_assistant(args: argparse.Namespace) -> int:
+    from retail_sales_pipeline.assistant.evaluate import run_bench, write_results
+
+    conn, agent, model_name = _assistant_session()
+    with conn:
+        result = run_bench(agent.ask, agent.execute, model_name, progress=print)
+    path = write_results(result, args.label)
+    print(json.dumps(result["summary"], indent=2))
+    print(f"Results: {path}")
+    return EXIT_OK
 
 
 def _cmd_load(args: argparse.Namespace) -> int:
@@ -123,6 +174,16 @@ def main(argv: Sequence[str] | None = None) -> int:
             return _cmd_run(args)
         if args.command == "load":
             return _cmd_load(args)
+        if args.command in ("ask", "eval-assistant"):
+            command = _cmd_ask if args.command == "ask" else _cmd_eval_assistant
+            try:
+                return command(args)
+            except (psycopg.OperationalError, ValueError) as exc:
+                print(
+                    f"error: {exc}\nhint: run `make up && make load`, set DEEPSEEK_API_KEY",
+                    file=sys.stderr,
+                )
+                return EXIT_WAREHOUSE_UNAVAILABLE
         return _cmd_validate(args)
     except FileNotFoundError as exc:
         print(f"error: {exc}", file=sys.stderr)
