@@ -56,8 +56,12 @@ flowchart LR
 - Global Sales Dataset: 100,000 orders, 50 columns, 2015 to 2024.
 - 10 countries (USA, Canada, Brazil, UK, Germany, UAE, China, India, Japan, Australia).
 - 10 products (Product_A to Product_J).
-- Source: Global Sales Dataset (link to add).
-- Place the CSV at `data/global_sales_100k_50features.csv`.
+- Source: [mahfuzmee-eng/global-sales-dataset](https://huggingface.co/datasets/mahfuzmee-eng/global-sales-dataset)
+  on Hugging Face (MIT licence, uploaded in May 2026; the dataset card gives no description).
+  The data is synthetic: see [What this dataset can and cannot support](#what-this-dataset-can-and-cannot-support).
+- The CSV is not redistributed here. Download it and place it at
+  `data/global_sales_100k_50features.csv`; the file used for every result in this README has
+  SHA-256 `b8d4eeb32f04d1e566625a077221e96cc3fa3a89e5a8668f85b34ab8994ad481`.
 
 ## Quick start
 

@@ -1,7 +1,7 @@
 [project]
 name = "retail-sales-pipeline"
 version = "0.1.0"
-description = "Retail sales ETL: Pydantic validation, Polars transformation, CSV exports for a Power BI dashboard."
+description = "Retail sales ETL (Pydantic, Polars, PostgreSQL), Metabase dashboard, feasibility audit and an evaluated text-to-SQL assistant."
 authors = [
     { name = "lamine s", email = "lamine.2004pro.sow@gmail.com" }
 ]
