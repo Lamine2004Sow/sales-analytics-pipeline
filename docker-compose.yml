@@ -1,0 +1,45 @@
+# Local analytics stack: Postgres warehouse + Metabase dashboards.
+# Credentials come from .env (copy .env.example). Local development only.
+name: retail-analytics
+
+services:
+  warehouse:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${WAREHOUSE_USER:?set WAREHOUSE_USER in .env}
+      POSTGRES_PASSWORD: ${WAREHOUSE_PASSWORD:?set WAREHOUSE_PASSWORD in .env}
+      POSTGRES_DB: ${WAREHOUSE_DB:?set WAREHOUSE_DB in .env}
+    ports:
+      - "${WAREHOUSE_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  metabase:
+    image: metabase/metabase:v0.65.6.3
+    depends_on:
+      warehouse:
+        condition: service_healthy
+    environment:
+      MB_DB_TYPE: postgres
+      MB_DB_DBNAME: metabase_app
+      MB_DB_HOST: warehouse
+      MB_DB_PORT: 5432
+      MB_DB_USER: ${WAREHOUSE_USER}
+      MB_DB_PASS: ${WAREHOUSE_PASSWORD}
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+volumes:
+  pgdata:
