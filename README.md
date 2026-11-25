@@ -16,8 +16,8 @@
 
 An end-to-end retail ETL pipeline over the Global Sales Dataset (100,000 orders). Raw rows are
 validated with Pydantic, transformed with Polars into a star schema and KPI tables, loaded into a
-local Postgres warehouse, and shown in a Metabase dashboard. Power BI is planned as a second
-front end, since it is not available on Linux.
+local Postgres warehouse, and shown in a Metabase dashboard. The same star schema loads into
+Power BI, with a step-by-step guide in [docs/powerbi.md](docs/powerbi.md).
 
 ## Architecture
 
@@ -34,7 +34,7 @@ flowchart LR
     L --> W[(Postgres 16<br/>schema analytics)]
     W --> M[Metabase dashboard<br/>Retail Sales Overview]
     W --> Q[Text-to-SQL agent<br/>retail-pipeline ask]
-    D -.-> P[Power BI, planned<br/>docs/powerbi.md]
+    D -.-> P[Power BI<br/>docs/powerbi.md]
     E -.-> P
 ```
 
@@ -49,7 +49,7 @@ flowchart LR
 | Tests and lint | pytest, ruff |
 | Warehouse | Postgres 16 in Docker, loaded with psycopg |
 | Text-to-SQL | DeepSeek (`deepseek-chat`), sqlglot guardrails, execution-accuracy bench |
-| Dashboard | Metabase v0.65 in Docker (see [docs/metabase.md](docs/metabase.md)); Power BI planned (see [docs/powerbi.md](docs/powerbi.md)) |
+| Dashboard | Metabase v0.65 in Docker (see [docs/metabase.md](docs/metabase.md)); Power BI guide (see [docs/powerbi.md](docs/powerbi.md)) |
 
 ## Dataset
 
@@ -372,9 +372,10 @@ The full analysis is in [notebooks/what_can_this_data_support.ipynb](notebooks/w
 
 ## Power BI
 
-The current dashboard is Metabase, see [docs/metabase.md](docs/metabase.md). The Power BI guide
-(import from the CSV files in `data/processed/`, data model, DAX measures, six report pages, reference
-values) is kept in [docs/powerbi.md](docs/powerbi.md) as the planned Power BI version.
+The provisioned dashboard is Metabase, see [docs/metabase.md](docs/metabase.md). For Power BI,
+[docs/powerbi.md](docs/powerbi.md) gives the full build: import of the star schema from
+`data/processed/`, data model and relationships, DAX measures, six report pages, and the
+reference values each measure must match.
 
 ## Business questions
 
